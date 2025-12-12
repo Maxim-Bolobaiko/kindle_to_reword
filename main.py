@@ -312,7 +312,7 @@ def parse_kindle_clippings(file_path, history_set):
 
         book_title = lines[0]
         # The content is usually the last non-empty line
-        clean_word = lines[-1].strip('.,?!:;"“')
+        clean_word = lines[-1].strip(' .,?!:;"“”‘’')
         clean_word_lower = clean_word.lower()
 
         if clean_word and len(clean_word.split()) <= 5:
