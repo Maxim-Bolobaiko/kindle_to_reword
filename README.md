@@ -14,8 +14,8 @@
 ### 1. Скачайте проект
 Убедитесь, что у вас установлен **Python 3.8+**.
 ```bash
-git clone https://github.com/Maxim-Bolobaiko/kindle-to-reword.git
-cd kindle-to-reword
+git clone https://github.com/Maxim-Bolobaiko/kindle_to_reword.git
+cd kindle_to_reword
 ```
 
 ### 2. Установите зависимости
