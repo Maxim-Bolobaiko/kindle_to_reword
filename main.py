@@ -6,10 +6,13 @@ import random
 import re
 import time
 import traceback
+import unicodedata
 from collections import defaultdict
 
 import requests
 import translators as ts
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # --- LOGGING SETUP ---
 logging.basicConfig(
@@ -42,8 +45,31 @@ HISTORY_DIR = os.path.join(BASE_DIR, "history")
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 
 HISTORY_FILE = os.path.join(HISTORY_DIR, "processed_words.txt")
+CACHE_FILE = os.path.join(DATA_DIR, "translation_cache.json")
 LOCAL_CLIPPINGS_FILE = os.path.join(DATA_DIR, "My Clippings.txt")
 KINDLE_FILENAME_PART = "Clippings"
+
+
+# --- NETWORK SESSION SETUP ---
+def create_retry_session():
+    """
+    Creates a requests session with automatic retries for robust networking.
+    Retries on common server errors (5xx) and rate limits (429).
+    """
+    session = requests.Session()
+    retries = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["HEAD", "GET", "POST", "OPTIONS"],
+    )
+    adapter = HTTPAdapter(max_retries=retries)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
+NET_SESSION = create_retry_session()
 
 
 # --- FUNCTIONS ---
@@ -51,35 +77,35 @@ KINDLE_FILENAME_PART = "Clippings"
 
 def send_telegram_message(text):
     """
-    Sends a simple text message to the configured Telegram chat.
-    Retries up to 3 times in case of network errors.
+    Sends a simple text message to the configured Telegram chat using the global retry session.
+    Args:
+        text (str): The message to send.
     """
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     data = {"chat_id": TELEGRAM_CHAT_ID, "text": text}
-
-    for _ in range(3):
-        try:
-            requests.post(url, data=data, timeout=10)
-            return
-        except requests.RequestException:
-            time.sleep(2)
+    try:
+        NET_SESSION.post(url, data=data, timeout=10)
+    except Exception as e:
+        logger.error(f"Failed to send Telegram text: {e}")
 
 
 def notify_error(error_message, exception=None):
     """
     Logs an error to the console and sends a notification to Telegram.
+    Args:
+        error_message (str): The user-friendly error description.
+        exception (Exception, optional): The actual exception object for logging details.
     """
     full_msg = f"ERROR: {error_message}"
     logger.error(full_msg)
     if exception:
-        logger.error(f"Details: {exception}")
+        logger.exception("Exception details:")
     send_telegram_message(full_msg)
 
 
 def setup_directories():
     """
-    Creates the necessary directory structure (data, history, output)
-    if it does not exist.
+    Creates the necessary directory structure (data, history, output) if it does not exist.
     """
     for folder in [DATA_DIR, HISTORY_DIR, OUTPUT_DIR]:
         if not os.path.exists(folder):
@@ -92,17 +118,23 @@ def setup_directories():
 
 def sanitize_filename(name):
     """
-    Removes illegal characters from a filename string to ensure
-    it can be saved on the OS file system.
+    Sanitizes a string to be used as a valid filename.
+    Uses unicode normalization and removes illegal characters.
+    Args:
+        name (str): The original string (e.g. book title).
+    Returns:
+        str: Safe filename string.
     """
-    clean = re.sub(r"[^\w\s\(\)-]", "", name)
+    name = unicodedata.normalize("NFKC", name)
+    clean = re.sub(r"[^\w\s\(\)\-]", "", name)
     return clean.strip()[:50]
 
 
 def load_history():
     """
     Loads the set of previously processed words from the history file.
-    Returns a set of lowercase strings.
+    Returns:
+        set: A set of lowercase words.
     """
     if not os.path.exists(HISTORY_FILE):
         return set()
@@ -117,6 +149,8 @@ def load_history():
 def update_history(new_words):
     """
     Appends new words to the history file to prevent future duplicates.
+    Args:
+        new_words (list): List of words to append.
     """
     try:
         with open(HISTORY_FILE, "a", encoding="utf-8") as f:
@@ -127,11 +161,57 @@ def update_history(new_words):
         notify_error("Failed to update history file", e)
 
 
+# --- CACHE SYSTEM ---
+
+
+class TranslationCache:
+    """
+    Simple JSON-based cache system to store translation results locally.
+    Reduces API calls and speeds up repeated runs.
+    """
+
+    def __init__(self, filepath):
+        self.filepath = filepath
+        self.cache = self._load()
+
+    def _load(self):
+        """Loads cache from JSON file."""
+        if not os.path.exists(self.filepath):
+            return {}
+        try:
+            with open(self.filepath, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            logger.warning("Failed to load cache, starting fresh.")
+            return {}
+
+    def get(self, word):
+        """Retrieves data for a word if it exists."""
+        return self.cache.get(word.lower())
+
+    def set(self, word, data):
+        """Saves data for a word in memory."""
+        self.cache[word.lower()] = data
+
+    def save(self):
+        """Writes the current cache state to the JSON file."""
+        try:
+            with open(self.filepath, "w", encoding="utf-8") as f:
+                json.dump(self.cache, f, ensure_ascii=False, indent=2)
+            logger.info("Translation cache saved.")
+        except Exception as e:
+            logger.error(f"Failed to save cache: {e}")
+
+
+# --- MTP LOGIC ---
+
+
 def copy_from_mtp():
     """
     Attempts to locate a connected Kindle device via Windows MTP (Shell API)
     and copy the 'My Clippings.txt' file to the local data directory.
-    Returns True if successful, False otherwise.
+    Returns:
+        bool: True if successful, False otherwise.
     """
     if not WIN32_AVAILABLE:
         return False
@@ -197,14 +277,20 @@ def copy_from_mtp():
             return False
 
     except Exception as e:
+        logger.exception("MTP copy failed")
         notify_error("MTP copy failed", e)
         return False
 
 
 def parse_kindle_clippings(file_path, history_set):
     """
-    Parses the raw Kindle clippings file.
-    Groups words by book title and filters out duplicates and long phrases.
+    Parses the Kindle clippings file and groups words by book.
+    Filters out duplicates (history & session) and phrases longer than 5 words.
+    Args:
+        file_path (str): Path to clippings text file.
+        history_set (set): Set of words already processed.
+    Returns:
+        dict: {book_title: [word_list]}
     """
     logger.info(f"Analyzing file: {file_path}")
     try:
@@ -219,12 +305,14 @@ def parse_kindle_clippings(file_path, history_set):
     session_words_lower = set()
 
     for clip in reversed(raw_clips):
-        lines = clip.strip().split("\n")
-        if len(lines) < 3:
+        lines = [line.strip() for line in clip.split("\n") if line.strip()]
+
+        if len(lines) < 2:
             continue
 
-        book_title = lines[0].strip()
-        clean_word = lines[-1].strip().strip('.,?!:;"“')
+        book_title = lines[0]
+        # The content is usually the last non-empty line
+        clean_word = lines[-1].strip('.,?!:;"“')
         clean_word_lower = clean_word.lower()
 
         if clean_word and len(clean_word.split()) <= 5:
@@ -239,17 +327,32 @@ def parse_kindle_clippings(file_path, history_set):
     return books_dict
 
 
+# --- TRANSLATOR ---
+
+
 class ReversoTranslator:
     """
-    Handles interactions with the Reverso Context API to fetch translations,
-    synonyms, and usage examples.
+    Handles translation logic using Reverso Context API with Caching.
     """
+
+    def __init__(self, cache_system):
+        self.cache_system = cache_system
 
     def fetch_word_data(self, word):
         """
-        Fetches detailed translation data for a given word.
-        Returns a dictionary or None if translation fails.
+        Fetches detailed translation (synonyms, context) for a word.
+        Checks local cache first, then API.
+        Args:
+            word (str): English word or phrase.
+        Returns:
+            dict or None: Translation data structure.
         """
+        # 1. Check Cache first
+        cached_data = self.cache_system.get(word)
+        if cached_data:
+            return cached_data
+
+        # 2. If not in cache, fetch from Web
         try:
             data = ts.translate_text(
                 word,
@@ -315,15 +418,28 @@ class ReversoTranslator:
                         )
 
             result["translation"] = ", ".join(collected_synonyms[:5])
-            return result if result["translation"] else None
 
-        except Exception:
+            final_res = result if result["translation"] else None
+
+            # 3. Save to Cache if successful
+            if final_res:
+                self.cache_system.set(word, final_res)
+
+            return final_res
+
+        except Exception as e:
+            logger.warning(f"Translation failed for '{word}': {e}")
             return None
 
 
 def save_to_csv(data_list, filename):
     """
-    Saves a list of word data dictionaries to a CSV file formatted for ReWord.
+    Saves a list of word dictionaries to a ReWord-compatible CSV file.
+    Args:
+        data_list (list): List of dicts with word data.
+        filename (str): Name of the CSV file.
+    Returns:
+        str: Full path to the saved file or None on failure.
     """
     full_path = os.path.join(OUTPUT_DIR, filename)
     try:
@@ -351,8 +467,12 @@ def save_to_csv(data_list, filename):
 
 def send_to_telegram_doc(file_path, caption=""):
     """
-    Uploads the generated CSV file to Telegram with a caption.
-    Includes retry logic and timeouts.
+    Uploads a file to Telegram with retry logic.
+    Args:
+        file_path (str): Path to the file to upload.
+        caption (str): Caption text (supports emojis).
+    Returns:
+        bool: True if successful, False otherwise.
     """
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
     filename = os.path.basename(file_path)
@@ -363,12 +483,12 @@ def send_to_telegram_doc(file_path, caption=""):
             with open(file_path, "rb") as f:
                 files = {"document": f}
                 data = {"chat_id": TELEGRAM_CHAT_ID, "caption": caption}
-                r = requests.post(url, files=files, data=data, timeout=30)
+                r = NET_SESSION.post(url, files=files, data=data, timeout=30)
 
                 if r.status_code == 200:
                     return True
                 else:
-                    logger.warning(f"Telegram error (attempt {attempt}): {r.text}")
+                    logger.error(f"Telegram returned status {r.status_code}: {r.text}")
 
         except requests.exceptions.RequestException as e:
             logger.warning(f"Network error (attempt {attempt}): {e}")
@@ -385,7 +505,10 @@ if __name__ == "__main__":
     try:
         setup_directories()
         history = load_history()
-        translator = ReversoTranslator()
+
+        # Init Cache and Translator
+        cache = TranslationCache(CACHE_FILE)
+        translator = ReversoTranslator(cache)
 
         print("\n--- KINDLE TO REWORD ---")
 
@@ -437,25 +560,30 @@ if __name__ == "__main__":
 
                     for word in words:
                         print(f"   {word}...", end=" ")
+
+                        # Fetch (Web or Cache)
                         info = translator.fetch_word_data(word)
+
                         if info:
                             book_data.append(info)
                             current_book_successful_words.append(word)
                             print("[OK]")
                         else:
                             print("[FAIL]")
-                        time.sleep(random.uniform(1.0, 2.0))
+
+                        # Delay only if not cached (to be polite to Reverso)
+                        if not cache.get(word):
+                            time.sleep(random.uniform(1.0, 2.0))
 
                     if book_data:
                         safe_name = sanitize_filename(book_title)
-
                         current_date = time.strftime("%d.%m.%Y__%H-%M")
                         filename = f"{safe_name}_{current_date}.csv"
 
                         full_csv_path = save_to_csv(book_data, filename)
 
                         if full_csv_path:
-                            # Emoji is kept here as requested
+                            # Caption for Telegram (Emojis kept here)
                             caption = f"📕 {book_title}\n📅 {current_date}\nСлов: {len(book_data)}"
 
                             if send_to_telegram_doc(full_csv_path, caption):
@@ -464,6 +592,9 @@ if __name__ == "__main__":
                                 )
                         else:
                             logger.error(f"File save failed: {book_title}")
+
+                # Save cache to disk
+                cache.save()
 
                 if global_successful_words:
                     update_history(global_successful_words)
