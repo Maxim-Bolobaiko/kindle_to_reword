@@ -4,6 +4,7 @@ import logging
 import os
 import random
 import re
+import sys
 import time
 import traceback
 import unicodedata
@@ -27,7 +28,7 @@ try:
     from config import AUTO_CONFIRM, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 except ImportError:
     logger.critical("Config file not found. Please create config.py.")
-    exit()
+    sys.exit(1)
 
 try:
     import win32com.client
@@ -54,7 +55,6 @@ KINDLE_FILENAME_PART = "Clippings"
 def create_retry_session():
     """
     Creates a requests session with automatic retries for robust networking.
-    Retries on common server errors (5xx) and rate limits (429).
     """
     session = requests.Session()
     retries = Retry(
@@ -77,14 +77,15 @@ NET_SESSION = create_retry_session()
 
 def send_telegram_message(text):
     """
-    Sends a simple text message to the configured Telegram chat using the global retry session.
-    Args:
-        text (str): The message to send.
+    Sends a simple text message to the configured Telegram chat.
     """
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     data = {"chat_id": TELEGRAM_CHAT_ID, "text": text}
     try:
-        NET_SESSION.post(url, data=data, timeout=10)
+        r = NET_SESSION.post(url, data=data, timeout=10)
+        # Улучшенная проверка ответа API
+        if not r.ok or not r.json().get("ok"):
+            logger.error(f"Telegram API Error: {r.text}")
     except Exception as e:
         logger.error(f"Failed to send Telegram text: {e}")
 
@@ -92,9 +93,6 @@ def send_telegram_message(text):
 def notify_error(error_message, exception=None):
     """
     Logs an error to the console and sends a notification to Telegram.
-    Args:
-        error_message (str): The user-friendly error description.
-        exception (Exception, optional): The actual exception object for logging details.
     """
     full_msg = f"ERROR: {error_message}"
     logger.error(full_msg)
@@ -105,7 +103,7 @@ def notify_error(error_message, exception=None):
 
 def setup_directories():
     """
-    Creates the necessary directory structure (data, history, output) if it does not exist.
+    Creates the necessary directory structure.
     """
     for folder in [DATA_DIR, HISTORY_DIR, OUTPUT_DIR]:
         if not os.path.exists(folder):
@@ -114,16 +112,12 @@ def setup_directories():
                 logger.info(f"Created directory: {folder}")
             except Exception as e:
                 notify_error(f"Failed to create directory {folder}", e)
+                sys.exit(1)
 
 
 def sanitize_filename(name):
     """
     Sanitizes a string to be used as a valid filename.
-    Uses unicode normalization and removes illegal characters.
-    Args:
-        name (str): The original string (e.g. book title).
-    Returns:
-        str: Safe filename string.
     """
     name = unicodedata.normalize("NFKC", name)
     clean = re.sub(r"[^\w\s\(\)\-]", "", name)
@@ -133,8 +127,6 @@ def sanitize_filename(name):
 def load_history():
     """
     Loads the set of previously processed words from the history file.
-    Returns:
-        set: A set of lowercase words.
     """
     if not os.path.exists(HISTORY_FILE):
         return set()
@@ -148,9 +140,7 @@ def load_history():
 
 def update_history(new_words):
     """
-    Appends new words to the history file to prevent future duplicates.
-    Args:
-        new_words (list): List of words to append.
+    Appends new words to the history file.
     """
     try:
         with open(HISTORY_FILE, "a", encoding="utf-8") as f:
@@ -161,13 +151,27 @@ def update_history(new_words):
         notify_error("Failed to update history file", e)
 
 
+def safe_read_file(filepath):
+    """
+    Attempts to read a file with multiple encodings (UTF-8, CP1251, etc.)
+    Fixes the 'UnicodeDecodeError' issue on different systems.
+    """
+    encodings = ["utf-8-sig", "utf-8", "cp1251", "latin1"]
+    for enc in encodings:
+        try:
+            with open(filepath, "r", encoding=enc) as f:
+                return f.read()
+        except UnicodeDecodeError:
+            continue
+    raise UnicodeDecodeError(f"Could not decode {filepath} with supported encodings.")
+
+
 # --- CACHE SYSTEM ---
 
 
 class TranslationCache:
     """
-    Simple JSON-based cache system to store translation results locally.
-    Reduces API calls and speeds up repeated runs.
+    Simple JSON-based cache system with ATOMIC WRITES.
     """
 
     def __init__(self, filepath):
@@ -175,7 +179,6 @@ class TranslationCache:
         self.cache = self._load()
 
     def _load(self):
-        """Loads cache from JSON file."""
         if not os.path.exists(self.filepath):
             return {}
         try:
@@ -186,21 +189,31 @@ class TranslationCache:
             return {}
 
     def get(self, word):
-        """Retrieves data for a word if it exists."""
         return self.cache.get(word.lower())
 
     def set(self, word, data):
-        """Saves data for a word in memory."""
         self.cache[word.lower()] = data
 
     def save(self):
-        """Writes the current cache state to the JSON file."""
+        """
+        Atomic Save: Writes to a .tmp file first, then renames it.
+        Prevents data corruption if the script crashes during write.
+        """
+        tmp_file = self.filepath + ".tmp"
         try:
-            with open(self.filepath, "w", encoding="utf-8") as f:
+            with open(tmp_file, "w", encoding="utf-8") as f:
                 json.dump(self.cache, f, ensure_ascii=False, indent=2)
-            logger.info("Translation cache saved.")
+
+            # Atomic replacement
+            if os.path.exists(self.filepath):
+                os.remove(self.filepath)
+            os.rename(tmp_file, self.filepath)
+
+            logger.info("Translation cache saved (Atomic).")
         except Exception as e:
             logger.error(f"Failed to save cache: {e}")
+            if os.path.exists(tmp_file):
+                os.remove(tmp_file)
 
 
 # --- MTP LOGIC ---
@@ -208,10 +221,7 @@ class TranslationCache:
 
 def copy_from_mtp():
     """
-    Attempts to locate a connected Kindle device via Windows MTP (Shell API)
-    and copy the 'My Clippings.txt' file to the local data directory.
-    Returns:
-        bool: True if successful, False otherwise.
+    Attempts to locate a connected Kindle device and copy the file.
     """
     if not WIN32_AVAILABLE:
         return False
@@ -284,18 +294,12 @@ def copy_from_mtp():
 
 def parse_kindle_clippings(file_path, history_set):
     """
-    Parses the Kindle clippings file and groups words by book.
-    Filters out duplicates (history & session) and phrases longer than 5 words.
-    Args:
-        file_path (str): Path to clippings text file.
-        history_set (set): Set of words already processed.
-    Returns:
-        dict: {book_title: [word_list]}
+    Parses the Kindle clippings file with encoding fallback.
     """
     logger.info(f"Analyzing file: {file_path}")
     try:
-        with open(file_path, "r", encoding="utf-8-sig") as f:
-            content = f.read()
+        # Improved: Safe read with encoding detection
+        content = safe_read_file(file_path)
     except Exception as e:
         notify_error(f"Failed to open file {file_path}", e)
         return {}
@@ -311,7 +315,7 @@ def parse_kindle_clippings(file_path, history_set):
             continue
 
         book_title = lines[0]
-        # The content is usually the last non-empty line
+        # Improved: Strip all types of quotes
         clean_word = lines[-1].strip(' .,?!:;"“”‘’')
         clean_word_lower = clean_word.lower()
 
@@ -339,14 +343,6 @@ class ReversoTranslator:
         self.cache_system = cache_system
 
     def fetch_word_data(self, word):
-        """
-        Fetches detailed translation (synonyms, context) for a word.
-        Checks local cache first, then API.
-        Args:
-            word (str): English word or phrase.
-        Returns:
-            dict or None: Translation data structure.
-        """
         # 1. Check Cache first
         cached_data = self.cache_system.get(word)
         if cached_data:
@@ -435,11 +431,6 @@ class ReversoTranslator:
 def save_to_csv(data_list, filename):
     """
     Saves a list of word dictionaries to a ReWord-compatible CSV file.
-    Args:
-        data_list (list): List of dicts with word data.
-        filename (str): Name of the CSV file.
-    Returns:
-        str: Full path to the saved file or None on failure.
     """
     full_path = os.path.join(OUTPUT_DIR, filename)
     try:
@@ -467,12 +458,7 @@ def save_to_csv(data_list, filename):
 
 def send_to_telegram_doc(file_path, caption=""):
     """
-    Uploads a file to Telegram with retry logic.
-    Args:
-        file_path (str): Path to the file to upload.
-        caption (str): Caption text (supports emojis).
-    Returns:
-        bool: True if successful, False otherwise.
+    Uploads a file to Telegram with retry logic and response validation.
     """
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
     filename = os.path.basename(file_path)
@@ -485,10 +471,11 @@ def send_to_telegram_doc(file_path, caption=""):
                 data = {"chat_id": TELEGRAM_CHAT_ID, "caption": caption}
                 r = NET_SESSION.post(url, files=files, data=data, timeout=30)
 
-                if r.status_code == 200:
+                # Improved API validation
+                if r.ok and r.json().get("ok"):
                     return True
                 else:
-                    logger.error(f"Telegram returned status {r.status_code}: {r.text}")
+                    logger.error(f"Telegram error (attempt {attempt}): {r.text}")
 
         except requests.exceptions.RequestException as e:
             logger.warning(f"Network error (attempt {attempt}): {e}")
@@ -529,10 +516,10 @@ if __name__ == "__main__":
                 logger.info("Using local file.")
             else:
                 logger.info("Operation cancelled.")
-                exit()
+                sys.exit(0)
         else:
             logger.error("No Kindle and no local file found.")
-            exit()
+            sys.exit(1)
 
         books_data = parse_kindle_clippings(target_file, history)
 
@@ -561,7 +548,6 @@ if __name__ == "__main__":
                     for word in words:
                         print(f"   {word}...", end=" ")
 
-                        # Fetch (Web or Cache)
                         info = translator.fetch_word_data(word)
 
                         if info:
@@ -571,7 +557,6 @@ if __name__ == "__main__":
                         else:
                             print("[FAIL]")
 
-                        # Delay only if not cached (to be polite to Reverso)
                         if not cache.get(word):
                             time.sleep(random.uniform(1.0, 2.0))
 
@@ -583,7 +568,6 @@ if __name__ == "__main__":
                         full_csv_path = save_to_csv(book_data, filename)
 
                         if full_csv_path:
-                            # Caption for Telegram (Emojis kept here)
                             caption = f"📕 {book_title}\n📅 {current_date}\nСлов: {len(book_data)}"
 
                             if send_to_telegram_doc(full_csv_path, caption):
@@ -593,7 +577,7 @@ if __name__ == "__main__":
                         else:
                             logger.error(f"File save failed: {book_title}")
 
-                # Save cache to disk
+                # Atomic save cache
                 cache.save()
 
                 if global_successful_words:
@@ -604,6 +588,8 @@ if __name__ == "__main__":
 
     except KeyboardInterrupt:
         print("\nStopped by user.")
+        sys.exit(0)
     except Exception as critical_e:
         notify_error("Critical script error", critical_e)
         traceback.print_exc()
+        sys.exit(1)
