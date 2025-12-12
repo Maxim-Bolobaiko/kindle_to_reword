@@ -83,7 +83,6 @@ def send_telegram_message(text):
     data = {"chat_id": TELEGRAM_CHAT_ID, "text": text}
     try:
         r = NET_SESSION.post(url, data=data, timeout=10)
-        # Улучшенная проверка ответа API
         if not r.ok or not r.json().get("ok"):
             logger.error(f"Telegram API Error: {r.text}")
     except Exception as e:
@@ -154,7 +153,6 @@ def update_history(new_words):
 def safe_read_file(filepath):
     """
     Attempts to read a file with multiple encodings (UTF-8, CP1251, etc.)
-    Fixes the 'UnicodeDecodeError' issue on different systems.
     """
     encodings = ["utf-8-sig", "utf-8", "cp1251", "latin1"]
     for enc in encodings:
@@ -163,7 +161,8 @@ def safe_read_file(filepath):
                 return f.read()
         except UnicodeDecodeError:
             continue
-    raise UnicodeDecodeError(f"Could not decode {filepath} with supported encodings.")
+    # FIX: Using UnicodeError instead of UnicodeDecodeError to allow custom message
+    raise UnicodeError(f"Could not decode {filepath} with supported encodings.")
 
 
 # --- CACHE SYSTEM ---
@@ -196,18 +195,15 @@ class TranslationCache:
 
     def save(self):
         """
-        Atomic Save: Writes to a .tmp file first, then renames it.
-        Prevents data corruption if the script crashes during write.
+        Atomic Save using os.replace.
         """
         tmp_file = self.filepath + ".tmp"
         try:
             with open(tmp_file, "w", encoding="utf-8") as f:
                 json.dump(self.cache, f, ensure_ascii=False, indent=2)
 
-            # Atomic replacement
-            if os.path.exists(self.filepath):
-                os.remove(self.filepath)
-            os.rename(tmp_file, self.filepath)
+            # FIX: os.replace is atomic and handles overwrites correctly on Windows
+            os.replace(tmp_file, self.filepath)
 
             logger.info("Translation cache saved (Atomic).")
         except Exception as e:
@@ -298,7 +294,6 @@ def parse_kindle_clippings(file_path, history_set):
     """
     logger.info(f"Analyzing file: {file_path}")
     try:
-        # Improved: Safe read with encoding detection
         content = safe_read_file(file_path)
     except Exception as e:
         notify_error(f"Failed to open file {file_path}", e)
@@ -315,7 +310,7 @@ def parse_kindle_clippings(file_path, history_set):
             continue
 
         book_title = lines[0]
-        # Improved: Strip all types of quotes
+        # Clean quotes and punctuation
         clean_word = lines[-1].strip(' .,?!:;"“”‘’')
         clean_word_lower = clean_word.lower()
 
@@ -471,7 +466,7 @@ def send_to_telegram_doc(file_path, caption=""):
                 data = {"chat_id": TELEGRAM_CHAT_ID, "caption": caption}
                 r = NET_SESSION.post(url, files=files, data=data, timeout=30)
 
-                # Improved API validation
+                # Validation: Check both HTTP status and JSON 'ok' field
                 if r.ok and r.json().get("ok"):
                     return True
                 else:
