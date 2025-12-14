@@ -1,8 +1,8 @@
 import csv
 import json
 import logging
+import os
 import re
-import time
 import unicodedata
 from collections import defaultdict
 
@@ -153,6 +153,7 @@ def parse_clippings_content(content, history_set):
 def create_csv(data_list, output_path):
     """Generates the final CSV file."""
     try:
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
         with open(output_path, mode="w", encoding="utf-8-sig", newline="") as file:
             writer = csv.writer(file, delimiter=";", quoting=csv.QUOTE_ALL)
 
