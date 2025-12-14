@@ -431,9 +431,6 @@ def save_to_csv(data_list, filename):
     try:
         with open(full_path, mode="w", encoding="utf-8-sig", newline="") as file:
             writer = csv.writer(file, delimiter=";", quoting=csv.QUOTE_ALL)
-            writer.writerow(
-                ["Word", "Transcription", "Translation", "Example", "Ex.Translation"]
-            )
             for entry in data_list:
                 writer.writerow(
                     [
