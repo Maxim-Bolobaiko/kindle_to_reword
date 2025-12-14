@@ -30,11 +30,13 @@ AUTO_CONFIRM = os.getenv("AUTO_CONFIRM", "False").lower() == "true"
 
 # --- Paths ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# SQLite database file
-DB_FILE = os.path.join(BASE_DIR, "bot_database.db")
-# Temporary folder for processing files
-TEMP_DIR = os.path.join(BASE_DIR, "temp")
 
-# Create temp directory if it does not exist
-if not os.path.exists(TEMP_DIR):
-    os.makedirs(TEMP_DIR)
+# Database file path
+db_path_env = os.getenv("DB_PATH")
+if db_path_env:
+    DB_FILE = db_path_env
+else:
+    DB_FILE = os.path.join(BASE_DIR, "bot_database.db")
+
+# Temporary folder
+TEMP_DIR = os.path.join(BASE_DIR, "temp")
