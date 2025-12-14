@@ -1,3 +1,6 @@
+pyTelegramBotAPI
 requests
 translators
-pywin32
+beautifulsoup4 
+python-dotenv   
+urllib3==1.26.15

@@ -1,19 +1,14 @@
-# Python
 venv/
 __pycache__/
 *.pyc
-
-# Конфигурация с паролями
-config.py
-
-# Данные пользователя
+.env
+*.db
+temp/
 data/
 history/
 output/
 processed_words.txt
 My Clippings.txt
-
-# Системные файлы
 .DS_Store
 Thumbs.db
 .vscode/

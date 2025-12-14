@@ -1,45 +1,59 @@
-# Kindle to ReWord Bot 📚
+# Kindle2ReWord Bot 📚🤖
 
-Скрипт для автоматического извлечения слов из **Amazon Kindle** (My Clippings.txt), их перевода через контекстный словарь Reverso и отправки готовых CSV-файлов в **Telegram** для импорта в приложение **ReWord**.
+A smart Telegram bot that automates the workflow between **Amazon Kindle** highlights and the **ReWord** app. It processes your clippings, intelligently translates them, and prevents duplicates.
 
-## ✨ Возможности
-* 🔌 **Автоматическое определение Kindle** при подключении по USB (Windows MTP).
-* 📂 Парсинг `My Clippings.txt` и группировка слов по книгам.
-* 🧠 **Умная история:** скрипт запоминает уже переведенные слова и не дублирует их.
-* EN➡️RU **Перевод:** использует Reverso Context (синонимы + примеры употребления).
-* ✈️ **Telegram:** отправляет готовые файлы прямо в чат.
+## ✨ Features
 
-## 🚀 Установка
+* **Smart Hybrid Translation:**
+    * **1-2 words:** Uses **Reverso Context** to provide synonyms and usage examples (ideal for learning deep context).
+    * **3+ words:** Uses **Google Translate** for accurate full-sentence translation (ideal for phrases/sentences).
+* **Duplicate Prevention:** Uses a persistent **SQLite database** to track user history. It ignores words you have already processed in previous uploads.
+* **Kindle Parser:** Extracts clean words/sentences from the raw `My Clippings.txt` file.
+* **Instant Export:** Generates a ready-to-import CSV file for ReWord directly in the Telegram chat.
+* **Secure:** Configuration is separated from code using Environment Variables.
 
-### 1. Скачайте проект
-Убедитесь, что у вас установлен **Python 3.8+**.
+## 🛠 Installation
+
+### 1. Clone the repository
 ```bash
-git clone https://github.com/Maxim-Bolobaiko/kindle_to_reword.git
-cd kindle_to_reword
+git clone https://github.com/Maxim-Bolobaiko/kindle_to_reword
+cd kindle_bot
 ```
 
-### 2. Установите зависимости
+### 2. Install dependencies
+
+Ensure you have **Python 3.9+** installed.
 ```Bash
 pip install -r requirements.txt
 ```
+### 3. Configuration
 
-### 3. Настройте бота
-1. Создайте бота в Telegram через **[@BotFather](https://t.me/BotFather)** и получите `TOKEN`.
-2. Узнайте свой ID через **[@userinfobot](https://t.me/userinfobot)**.
-3. Переименуйте файл `config_example.py` в `config.py`.
-4. Впишите туда полученные данные.
+1. Create a `.env` file in the root directory (use `.env.example` as a template).
+2. Fill in your details:
 
-## ▶️ Использование
-1. Подключите Kindle к компьютеру кабелем.
-2. Запустите скрипт:
-```Bash
-python main.py
+```ini
+BOT_TOKEN=your_telegram_bot_token
+ADMIN_ID=your_telegram_user_id
+AUTO_CONFIRM=True
 ```
-3. Скрипт найдет новые слова, переведет их и пришлет CSV-файл вам в Telegram.
-4. Откройте файл на телефоне и выберите *"Импорт в ReWord"*.
+## ▶️ Usage
 
-## 🛠 Структура папок (создается автоматически)
-* `data/` - сюда копируется файл с Kindle.
-* `history/` - здесь хранится список уже переведённых слов.
-* `output/` - здесь лежат готовые CSV файлы.
-___
+Run the bot:
+```Bash
+python bot.py
+```
+1. Open your bot in Telegram and send `/start`.
+2. Connect your Kindle via USB and locate `documents/My Clippings.txt`.
+3. Drag and drop the `.txt` file into the Telegram chat.
+4. Receive your CSV file and import it into ReWord!
+
+## 📂 Project Structure
+
+* `bot.py` - Main entry point (Telegram listener).
+* `core.py` - "Brain" of the bot: parsing logic and translation router.
+* `database.py` - SQLite management for user history.
+* `config.py` - Environment configuration loader.
+
+## 📄 License
+
+MIT
