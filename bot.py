@@ -32,24 +32,17 @@ translator = core.SmartTranslator()
 
 
 async def setup_bot_interface(bot: Bot):
-    """
-    Sets up the menu commands and the 'Short Description'
-    (the text visible before clicking Start).
-    """
-    # 1. Main Menu Commands
     main_menu_commands = [
         BotCommand(command="/start", description="Restart & Welcome"),
         BotCommand(command="/help", description="How to find the file?"),
     ]
     await bot.set_my_commands(main_menu_commands)
 
-    # 2. Short Description (Placeholder text)
     await bot.set_my_short_description(
         "📚 Turn your Kindle highlights into flashcards for ReWord.\n\n"
         "Send me your 'My Clippings.txt' file! 📤"
     )
 
-    # 3. Full Description (Bot Profile)
     await bot.set_my_description(
         "I am your Kindle Vocabulary Assistant. 🤖\n\n"
         "1. Send me your 'My Clippings.txt' file.\n"
@@ -64,10 +57,7 @@ async def setup_bot_interface(bot: Bot):
 
 @dp.message(CommandStart())
 async def send_welcome(message: types.Message):
-    """Handles /start command."""
     user_name = html.escape(message.from_user.first_name)
-
-    # Inline Keyboard
     kb = [
         [
             InlineKeyboardButton(
@@ -77,7 +67,6 @@ async def send_welcome(message: types.Message):
     ]
     keyboard = InlineKeyboardMarkup(inline_keyboard=kb)
 
-    # Using HTML for formatting
     welcome_text = (
         f"👋 <b>Hello, {user_name}!</b>\n\n"
         f"I am your <b>Kindle Vocabulary Assistant</b>. 🤖\n"
@@ -85,44 +74,40 @@ async def send_welcome(message: types.Message):
         f"📂 <b>To start:</b>\n"
         f"Simply drag and drop your <code>My Clippings.txt</code> file here."
     )
-
     await message.answer(welcome_text, parse_mode="HTML", reply_markup=keyboard)
 
 
 @dp.message(Command("help"))
 async def send_help_command(message: types.Message):
-    """Handles /help command."""
     await show_help_text(message)
 
 
 @dp.callback_query(F.data == "show_help")
 async def send_help_callback(callback: CallbackQuery):
-    """Handles the button click."""
     await show_help_text(callback.message)
     await callback.answer()
 
 
 async def show_help_text(message: types.Message):
-    """Common function to send help instructions."""
     help_text = (
         "📖 <b>How to find your file:</b>\n\n"
         "1. Connect your Kindle to your computer via USB 🔌.\n"
-        "2. Open the Kindle drive (like a USB stick).\n"
+        "2. Open the Kindle drive.\n"
         "3. Go to the <code>documents</code> folder.\n"
         "4. Look for a file named <code>My Clippings.txt</code>.\n"
-        "5. Drag and drop that file right here into this chat! 📤"
+        "5. Drag and drop that file right here! 📤"
     )
     await message.answer(help_text, parse_mode="HTML")
 
 
 @dp.message(F.document)
 async def handle_docs(message: types.Message):
-    """Main handler for file uploads."""
     try:
         user_id = message.from_user.id
         file_name = message.document.file_name
+        file_size = message.document.file_size
 
-        # 1. Validate extension
+        # 1. Validate Extension
         if not file_name.endswith(".txt"):
             await message.reply(
                 "⚠️ Please send a <b>.txt</b> file (specifically <code>My Clippings.txt</code>).",
@@ -130,19 +115,31 @@ async def handle_docs(message: types.Message):
             )
             return
 
+        # 2. Validate Size (Limit to 20MB)
+        if file_size > 20 * 1024 * 1024:
+            await message.reply(
+                "⚠️ <b>File is too large.</b> Please send a file smaller than 20MB.",
+                parse_mode="HTML",
+            )
+            return
+
+        # 3. Validate Empty File
+        if file_size == 0:
+            await message.reply(
+                "⚠️ <b>File is empty.</b> Please check your file.", parse_mode="HTML"
+            )
+            return
+
         status_msg = await message.reply(
             "⏳ File received. <b>Analyzing...</b>", parse_mode="HTML"
         )
 
-        # 2. Download file
+        # 4. Download & Decode
         file_id = message.document.file_id
         file = await bot.get_file(file_id)
-        file_path_on_server = file.file_path
-
-        downloaded_file = await bot.download_file(file_path_on_server)
+        downloaded_file = await bot.download_file(file.file_path)
         file_bytes = downloaded_file.read()
 
-        # 3. Decode content
         content = None
         for enc in ["utf-8-sig", "utf-8", "cp1251"]:
             try:
@@ -153,17 +150,18 @@ async def handle_docs(message: types.Message):
 
         if not content:
             await bot.edit_message_text(
-                "❌ <b>Error:</b> Could not decode file. Unknown encoding.",
+                "❌ <b>Error:</b> Unknown encoding.",
                 chat_id=user_id,
                 message_id=status_msg.message_id,
                 parse_mode="HTML",
             )
             return
 
-        # 4. Parse content
+        # 5. Parse
         history_set = database.get_user_history(user_id)
         books_data = core.parse_clippings_content(content, history_set)
 
+        # EDGE CASE: Invalid format (no separators)
         if books_data is None:
             await bot.edit_message_text(
                 "⚠️ <b>Invalid file format.</b>\n\n"
@@ -175,10 +173,10 @@ async def handle_docs(message: types.Message):
             )
             return
 
+        # EDGE CASE: No new words
         if not books_data:
             await bot.edit_message_text(
-                "ℹ️ <b>No new words found.</b>\n"
-                "It seems all words from this file are already in your history! ✅",
+                "ℹ️ <b>No new words found.</b>\nIt seems all words are already in your history! ✅",
                 chat_id=user_id,
                 message_id=status_msg.message_id,
                 parse_mode="HTML",
@@ -193,14 +191,11 @@ async def handle_docs(message: types.Message):
             parse_mode="HTML",
         )
 
-        # 5. Process each book
+        # 6. Process Books
         all_new_words = []
-
         for book_title, words in books_data.items():
             book_results = []
             safe_title = html.escape(book_title)
-
-            # Progress message
             prog_msg = await message.answer(
                 f"📖 Processing: <b>{safe_title}</b> ({len(words)} words)...",
                 parse_mode="HTML",
@@ -213,57 +208,49 @@ async def handle_docs(message: types.Message):
                     all_new_words.append(word)
 
             if book_results:
-                # Generate CSV
                 safe_name = core.sanitize_filename(book_title)
                 os.makedirs(TEMP_DIR, exist_ok=True)
-
-                csv_filename = f"{safe_name}.csv"
-                csv_path = os.path.join(TEMP_DIR, csv_filename)
+                csv_path = os.path.join(TEMP_DIR, f"{safe_name}.csv")
 
                 if core.create_csv(book_results, csv_path):
                     doc_file = FSInputFile(csv_path)
-                    await bot.send_document(
-                        user_id,
-                        doc_file,
-                        caption=f"📕 <b>{safe_title}</b>\n✅ Words added: <b>{len(book_results)}</b>",
-                        parse_mode="HTML",
-                    )
-                    os.remove(csv_path)
+                    try:
+                        await bot.send_document(
+                            user_id,
+                            doc_file,
+                            caption=f"📕 <b>{safe_title}</b>\n✅ Words added: <b>{len(book_results)}</b>",
+                            parse_mode="HTML",
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to send document: {e}")
+                    finally:
+                        os.remove(csv_path)
 
             try:
                 await bot.delete_message(user_id, prog_msg.message_id)
-            except Exception:
+            except:
                 pass
 
-        # 6. Update History
         if all_new_words:
             database.add_words_to_history(user_id, all_new_words)
             await message.answer(
-                "✅ <b>Done!</b> All words saved to history. They will be skipped next time.",
-                parse_mode="HTML",
+                "✅ <b>Done!</b> All words saved to history.", parse_mode="HTML"
             )
 
         try:
             await bot.delete_message(user_id, status_msg.message_id)
-        except Exception:
+        except:
             pass
 
     except Exception as e:
-        logger.error(
-            f"Error processing user {message.from_user.id}: {e}", exc_info=True
-        )
+        logger.error(f"Error: {e}", exc_info=True)
         await message.reply(
             "❌ <b>Internal error.</b> Please try again later.", parse_mode="HTML"
         )
 
 
-# --- Startup ---
-
-
 async def main():
-    # Setup commands and descriptions
     await setup_bot_interface(bot)
-
     await bot.delete_webhook(drop_pending_updates=True)
     logger.info("Bot started! 🚀")
     await dp.start_polling(bot)
