@@ -164,9 +164,21 @@ async def handle_docs(message: types.Message):
         history_set = database.get_user_history(user_id)
         books_data = core.parse_clippings_content(content, history_set)
 
+        if books_data is None:
+            await bot.edit_message_text(
+                "⚠️ <b>Invalid file format.</b>\n\n"
+                "This doesn't look like a Kindle clippings file.\n"
+                "Please check that the file contains the <code>==========</code> separators.",
+                chat_id=user_id,
+                message_id=status_msg.message_id,
+                parse_mode="HTML",
+            )
+            return
+
         if not books_data:
             await bot.edit_message_text(
-                "ℹ️ <b>No new words found.</b>\nMaybe you already processed them?",
+                "ℹ️ <b>No new words found.</b>\n"
+                "It seems all words from this file are already in your history! ✅",
                 chat_id=user_id,
                 message_id=status_msg.message_id,
                 parse_mode="HTML",

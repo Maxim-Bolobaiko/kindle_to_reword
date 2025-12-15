@@ -178,6 +178,9 @@ def sanitize_filename(name):
 
 def parse_clippings_content(content, history_set):
     """Parses 'My Clippings.txt'."""
+    if "==========" not in content:
+        return None
+
     raw_clips = content.split("==========")
     books_dict = defaultdict(list)
     session_words = set()
