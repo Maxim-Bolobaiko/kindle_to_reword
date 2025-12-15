@@ -1,25 +1,18 @@
-# 1. Берем образ Python
+# 1. Use lightweight Python image
 FROM python:3.10-slim
 
-# 2. Отключаем буферизацию
+# 2. Disable buffering for logs
 ENV PYTHONUNBUFFERED=1
 
-# 3. Устанавливаем системные зависимости
-# ВАЖНО: Добавляем установку nodejs для работы библиотеки translators (Reverso)
-RUN apt-get update && \
-    apt-get install -y nodejs && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
-
-# 4. Рабочая папка
+# 3. Create working directory
 WORKDIR /app
 
-# 5. Зависимости Python
+# 4. Install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 6. Копируем код
+# 5. Copy project files
 COPY . .
 
-# 7. Запуск
+# 6. Run the bot
 CMD ["python", "bot.py"]

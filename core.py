@@ -13,9 +13,9 @@ from urllib3.util.retry import Retry
 logger = logging.getLogger(__name__)
 
 
-# --- Networking ---
+# --- Networking Setup ---
 def create_retry_session():
-    """Creates a requests session with retry logic."""
+    """Creates a requests session with retry logic to handle network blips."""
     session = requests.Session()
     retries = Retry(
         total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504]
@@ -31,7 +31,7 @@ NET_SESSION = create_retry_session()
 # --- Translator Logic ---
 class SmartTranslator:
     def _translate_google(self, word_clean):
-        """Самый надежный, но простой перевод (План С)"""
+        """Fallback method: Uses Google Translate for simple translation."""
         try:
             translation = ts.translate_text(
                 word_clean,
@@ -46,87 +46,25 @@ class SmartTranslator:
                 "example_ru": "",
             }
         except Exception as e:
-            logger.error(f"Google fallback failed too for '{word_clean}': {e}")
+            logger.error(f"Google translation failed for '{word_clean}': {e}")
             return None
-
-    def _translate_deepl(self, word_clean):
-        """Высокоточный перевод через DeepL (План Б)"""
-        try:
-            # Запрашиваем структуру
-            data = ts.translate_text(
-                word_clean,
-                translator="deepl",
-                from_language="en",
-                to_language="ru",
-                is_detail_result=True,
-            )
-
-            # DeepL иногда возвращает строку, иногда словарь. Обрабатываем оба варианта.
-            if isinstance(data, str):
-                try:
-                    data = json.loads(data)
-                except:
-                    # Если это просто текст перевода
-                    return {
-                        "word": word_clean,
-                        "translation": data,
-                        "example_en": "",
-                        "example_ru": "",
-                    }
-
-            # Парсим JSON структуру DeepL (beams)
-            # Структура: result -> translations[0] -> beams -> [sentences -> text]
-            variants = []
-
-            # Безопасный доступ к вложенным ключам
-            translations = data.get("result", {}).get("translations", [])
-            if translations:
-                beams = translations[0].get("beams", [])
-                for beam in beams:
-                    sentences = beam.get("sentences", [])
-                    if sentences:
-                        text = sentences[0].get("text")
-                        if text:
-                            variants.append(text)
-
-            if not variants:
-                # Если сложная структура не нашлась, пробуем простое поле
-                raise ValueError("DeepL structure parsing failed")
-
-            # Берем топ-3 уникальных варианта (чтобы не было спама)
-            unique_variants = list(dict.fromkeys(variants))[:3]
-
-            return {
-                "word": word_clean,
-                "translation": ", ".join(unique_variants),
-                "example_en": "",  # DeepL в этом API редко дает примеры
-                "example_ru": "",
-            }
-
-        except Exception as e:
-            logger.warning(
-                f"DeepL failed for '{word_clean}': {e}. Switching to Google."
-            )
-            # Если DeepL не справился - зовем Google
-            return self._translate_google(word_clean)
 
     def fetch_word_data(self, word):
         """
-        Умный каскад:
-        1. Reverso (Идеал: синонимы + примеры)
-        2. DeepL (Отлично: точные синонимы)
-        3. Google (База: просто перевод)
+        Main logic:
+        1. If word count < 3: Try Reverso (for context/synonyms).
+        2. If word count >= 3 OR Reverso fails: Use Google.
         """
         word_clean = word.strip()
         word_count = len(word_clean.split())
 
-        # Если это длинная фраза (больше 4 слов), Reverso и DeepL часто тупят при парсинге.
-        # Лучше сразу отдать Google или DeepL (без detail mode)
-        if word_count >= 4:
+        # CASE 1: Long phrase -> Use Google immediately
+        if word_count >= 3:
             return self._translate_google(word_clean)
 
-        # --- ПЛАН А: REVERSO ---
+        # CASE 2: Short word -> Try Reverso first
         try:
+            # Request detailed data from Reverso
             data = ts.translate_text(
                 word_clean,
                 translator="reverso",
@@ -135,6 +73,7 @@ class SmartTranslator:
                 is_detail_result=True,
             )
 
+            # Handle potential JSON-in-string response
             if isinstance(data, str):
                 data = json.loads(data)
 
@@ -145,17 +84,18 @@ class SmartTranslator:
                 "example_ru": "",
             }
 
-            # 1. Перевод
+            # 1. Extract Translation (Synonyms)
             if data.get("translation"):
                 synonyms = data.get("translation", [])[:5]
                 result["translation"] = ", ".join(synonyms)
 
-            # 2. Контекст
+            # 2. Extract Context Examples
             context = data.get("contextResults", {}).get("results", [])
             for item in context:
                 src = item.get("sourceExamples", [])
                 tgt = item.get("targetExamples", [])
                 if src and tgt:
+                    # Clean HTML tags like <em>text</em>
                     result["example_en"] = (
                         str(src[0]).replace("<em>", "").replace("</em>", "")
                     )
@@ -164,31 +104,31 @@ class SmartTranslator:
                     )
                     break
 
+            # If Reverso returned empty translation, raise error to trigger fallback
             if not result["translation"]:
                 raise ValueError("Reverso returned empty translation")
 
             return result
 
         except Exception as e:
-            logger.warning(
-                f"Reverso failed for '{word}': {e}. Switching to DeepL.", exc_info=True
-            )
-            # --- ПЛАН Б: DEEPL ---
-            return self._translate_deepl(word_clean)
+            # Log the issue (e.g. Node.js missing or IP ban) but DO NOT CRASH.
+            # Switch to Google automatically.
+            logger.warning(f"Reverso failed for '{word}': {e}. Switching to Google.")
+            return self._translate_google(word_clean)
 
 
-# --- Helper Functions ---
+# --- Parsing & CSV Utils ---
 
 
 def sanitize_filename(name):
-    """Cleans filename from illegal characters."""
+    """Removes illegal characters from filenames."""
     name = unicodedata.normalize("NFKC", name)
     clean = re.sub(r"[^\w\s\(\)\-а-яА-Я]", "", name)
     return clean.strip()[:50]
 
 
 def parse_clippings_content(content, history_set):
-    """Parses the raw content of My Clippings.txt."""
+    """Parses 'My Clippings.txt' content."""
     raw_clips = content.split("==========")
     books_dict = defaultdict(list)
     session_words = set()
@@ -199,9 +139,12 @@ def parse_clippings_content(content, history_set):
             continue
 
         book_title = lines[0]
+        # Clean punctuation from the word
         clean_word = lines[-1].strip(' .,?!:;"“”‘’«»()')
 
-        if clean_word and len(clean_word.split()) <= 15:
+        # Filter: Only accept words/phrases with 6 words or less
+        # (This prevents translating full sentences)
+        if clean_word and len(clean_word.split()) <= 6:
             word_lower = clean_word.lower()
 
             if word_lower not in history_set and word_lower not in session_words:
@@ -212,17 +155,15 @@ def parse_clippings_content(content, history_set):
 
 
 def create_csv(data_list, output_path):
-    """Generates the final CSV file."""
+    """Generates the CSV file for ReWord."""
     try:
         import os
 
+        # Ensure temp directory exists
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
         with open(output_path, mode="w", encoding="utf-8-sig", newline="") as file:
             writer = csv.writer(file, delimiter=";", quoting=csv.QUOTE_ALL)
-            writer.writerow(
-                ["Word", "Transcription", "Translation", "Example", "Ex.Translation"]
-            )
 
             for entry in data_list:
                 writer.writerow(
