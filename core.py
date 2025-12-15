@@ -209,10 +209,6 @@ def create_csv(data_list, output_path):
 
         with open(output_path, mode="w", encoding="utf-8-sig", newline="") as file:
             writer = csv.writer(file, delimiter=";", quoting=csv.QUOTE_ALL)
-            # Header
-            writer.writerow(
-                ["Word", "Transcription", "Translation", "Example", "Ex.Translation"]
-            )
 
             for entry in data_list:
                 writer.writerow(
