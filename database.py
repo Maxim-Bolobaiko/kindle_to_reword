@@ -1,61 +1,54 @@
 import logging
 import sqlite3
 
-from config import DB_FILE
-
 logger = logging.getLogger(__name__)
+DB_NAME = "user_history.db"
 
 
 def init_db():
-    """Initializes the database tables."""
-    try:
-        with sqlite3.connect(DB_FILE) as conn:
-            cursor = conn.cursor()
-            # Table to store user history: who, what word, when
-            cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS user_words (
-                    user_id INTEGER,
-                    word TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(user_id, word)
-                )
-            """
-            )
-            conn.commit()
-    except Exception as e:
-        logger.error(f"Database initialization failed: {e}")
+    """Initializes the SQLite database with the history table."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS history (
+            user_id INTEGER,
+            word TEXT,
+            UNIQUE(user_id, word)
+        )
+    """
+    )
+    conn.commit()
+    conn.close()
 
 
 def get_user_history(user_id):
-    """Returns a set of words previously processed by the user."""
-    try:
-        with sqlite3.connect(DB_FILE) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT word FROM user_words WHERE user_id = ?", (user_id,))
-            return set(row[0] for row in cursor.fetchall())
-    except Exception as e:
-        logger.error(f"Failed to get user history: {e}")
-        return set()
+    """Returns a set of words already processed for the user."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT word FROM history WHERE user_id = ?", (user_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return {row[0] for row in rows}
 
 
-def add_words_to_history(user_id, words_list):
+def add_words_to_history(user_id, words):
     """Bulk adds new words to the user's history."""
-    if not words_list:
+    if not words:
         return
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
     try:
-        with sqlite3.connect(DB_FILE) as conn:
-            cursor = conn.cursor()
-            # Convert to lowercase for consistency
-            data = [(user_id, w.lower()) for w in words_list]
-            # INSERT OR IGNORE skips duplicates automatically
-            cursor.executemany(
-                "INSERT OR IGNORE INTO user_words (user_id, word) VALUES (?, ?)", data
-            )
-            conn.commit()
+        data = [(user_id, w.lower()) for w in words]
+        cursor.executemany(
+            "INSERT OR IGNORE INTO history (user_id, word) VALUES (?, ?)", data
+        )
+        conn.commit()
     except Exception as e:
-        logger.error(f"Failed to add words to history: {e}")
+        logger.error(f"DB Error: {e}")
+    finally:
+        conn.close()
 
 
-# Initialize DB on module import
+# Initialize DB on import
 init_db()

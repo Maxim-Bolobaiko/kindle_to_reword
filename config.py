@@ -1,44 +1,16 @@
 import os
-import sys
 
 from dotenv import load_dotenv
 
-# Load variables from .env file
+# Load environment variables
 load_dotenv()
 
-# --- Load Settings ---
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# 1. Bot Token
-TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN")
-if not TELEGRAM_BOT_TOKEN:
-    print("Error: BOT_TOKEN not found in .env")
-    sys.exit(1)
+# Key for Yandex Dictionary (Free, allows transcription)
+YANDEX_DICT_KEY = os.getenv("YANDEX_DICT_KEY")
 
-# 2. Admin ID
-admin_id_str = os.getenv("ADMIN_ID")
-if not admin_id_str:
-    print("Error: ADMIN_ID not found in .env")
-    sys.exit(1)
-try:
-    TELEGRAM_CHAT_ID = int(admin_id_str)
-except ValueError:
-    print("Error: ADMIN_ID must be an integer")
-    sys.exit(1)
+# Key for Yandex Cloud (Paid/Grant, smart neural translation)
+YANDEX_CLOUD_KEY = os.getenv("YANDEX_CLOUD_KEY")
 
-YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
-
-# 3. Logic Settings
-AUTO_CONFIRM = os.getenv("AUTO_CONFIRM", "False").lower() == "true"
-
-# --- Paths ---
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# Database file path
-db_path_env = os.getenv("DB_PATH")
-if db_path_env:
-    DB_FILE = db_path_env
-else:
-    DB_FILE = os.path.join(BASE_DIR, "bot_database.db")
-
-# Temporary folder
-TEMP_DIR = os.path.join(BASE_DIR, "temp")
+TEMP_DIR = "temp_files"
