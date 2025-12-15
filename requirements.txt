@@ -1,6 +1,5 @@
-pyTelegramBotAPI>=4.15.0
+aiogram
 requests
-translators>=5.9.0
+translators
 beautifulsoup4
 python-dotenv
-urllib3<2.0.0

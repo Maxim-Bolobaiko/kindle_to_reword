@@ -1,12 +1,14 @@
+import asyncio
 import logging
 import os
-import time
 
-import telebot
+from aiogram import Bot, Dispatcher, F, types
+from aiogram.filters import Command
+from aiogram.types import FSInputFile
 
 import core
 import database
-from config import TELEGRAM_BOT_TOKEN, TEMP_DIR
+from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TEMP_DIR
 
 # Configure logging
 logging.basicConfig(
@@ -14,50 +16,54 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Initialize Bot
-bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
+# Initialize Bot and Dispatcher (Aiogram 3.x)
+bot = Bot(token=TELEGRAM_BOT_TOKEN)
+dp = Dispatcher()
 translator = core.SmartTranslator()
 
 
-@bot.message_handler(commands=["start"])
-def send_welcome(message):
+@dp.message(Command("start"))
+async def send_welcome(message: types.Message):
     """Handles the /start command."""
-    bot.reply_to(
-        message,
-        "👋 Hello! Send me your 'My Clippings.txt' file, and I will convert it to CSV for ReWord.",
+    await message.reply(
+        "👋 Hello! Send me your 'My Clippings.txt' file, and I will convert it to CSV for ReWord."
     )
 
 
-@bot.message_handler(content_types=["document"])
-def handle_docs(message):
+@dp.message(F.document)
+async def handle_docs(message: types.Message):
     """Main logic: handles file uploads."""
     try:
         user_id = message.from_user.id
-        file_info = message.document
-        file_name = file_info.file_name
+        file_name = message.document.file_name
 
         # 1. Check file extension
         if not file_name.endswith(".txt"):
-            bot.reply_to(message, "⚠️ Please send a .txt file (My Clippings.txt).")
+            await message.reply("⚠️ Please send a .txt file (My Clippings.txt).")
             return
 
-        status_msg = bot.reply_to(message, "⏳ File received. Analyzing...")
+        status_msg = await message.reply("⏳ File received. Analyzing...")
 
         # 2. Download file
-        file_path_tg = bot.get_file(file_info.file_id).file_path
-        downloaded_file = bot.download_file(file_path_tg)
+        file_id = message.document.file_id
+        file = await bot.get_file(file_id)
+        file_path_on_server = file.file_path
 
-        # 3. Decode content (handle different encodings)
+        # Download content to memory buffer
+        downloaded_file = await bot.download_file(file_path_on_server)
+        file_bytes = downloaded_file.read()
+
+        # 3. Decode content
         content = None
         for enc in ["utf-8-sig", "utf-8", "cp1251"]:
             try:
-                content = downloaded_file.decode(enc)
+                content = file_bytes.decode(enc)
                 break
             except UnicodeDecodeError:
                 continue
 
         if not content:
-            bot.edit_message_text(
+            await bot.edit_message_text(
                 "❌ Error: Could not decode file. Unknown encoding.",
                 chat_id=user_id,
                 message_id=status_msg.message_id,
@@ -71,7 +77,7 @@ def handle_docs(message):
         books_data = core.parse_clippings_content(content, history_set)
 
         if not books_data:
-            bot.edit_message_text(
+            await bot.edit_message_text(
                 "ℹ️ No new words found.",
                 chat_id=user_id,
                 message_id=status_msg.message_id,
@@ -79,7 +85,7 @@ def handle_docs(message):
             return
 
         total_words = sum(len(v) for v in books_data.values())
-        bot.edit_message_text(
+        await bot.edit_message_text(
             f"🔎 Found {total_words} new words/phrases. Starting translation...",
             chat_id=user_id,
             message_id=status_msg.message_id,
@@ -92,14 +98,16 @@ def handle_docs(message):
             book_results = []
 
             # Send progress message
-            prog_msg = bot.send_message(
+            prog_msg = await bot.send_message(
                 user_id, f"📖 Processing: {book_title} ({len(words)} words)"
             )
 
             for word in words:
-                # Anti-spam delay
-                time.sleep(1.5)
+                # Small delay to be polite to APIs
+                await asyncio.sleep(1.0)
 
+                # Note: core.fetch_word_data is synchronous, but for this load it's acceptable.
+                # In high-load production, this should run in an executor.
                 info = translator.fetch_word_data(word)
                 if info:
                     book_results.append(info)
@@ -108,52 +116,56 @@ def handle_docs(message):
             if book_results:
                 # Create CSV
                 safe_name = core.sanitize_filename(book_title)
-                current_date = time.strftime("%d.%m.%Y")
-                csv_filename = f"{safe_name}_{current_date}.csv"
+                # Ensure temp directory exists (double check)
+                os.makedirs(TEMP_DIR, exist_ok=True)
+
+                csv_filename = f"{safe_name}.csv"
                 csv_path = os.path.join(TEMP_DIR, csv_filename)
 
                 if core.create_csv(book_results, csv_path):
-                    with open(csv_path, "rb") as f:
-                        bot.send_document(
-                            user_id,
-                            f,
-                            caption=f"📕 {book_title}\n✅ Words: {len(book_results)}",
-                        )
+                    # Send document using FSInputFile
+                    doc_file = FSInputFile(csv_path)
+                    await bot.send_document(
+                        user_id,
+                        doc_file,
+                        caption=f"📕 {book_title}\n✅ Words: {len(book_results)}",
+                    )
                     # Cleanup temp file
                     os.remove(csv_path)
 
             # Clean up progress message
             try:
-                bot.delete_message(user_id, prog_msg.message_id)
+                await bot.delete_message(user_id, prog_msg.message_id)
             except Exception:
                 pass
 
         # 7. Update Database
         if all_new_words:
             database.add_words_to_history(user_id, all_new_words)
-            bot.send_message(
+            await bot.send_message(
                 user_id,
                 "✅ All words added to your history. They will be skipped next time.",
             )
 
         # Cleanup status message
         try:
-            bot.delete_message(user_id, status_msg.message_id)
+            await bot.delete_message(user_id, status_msg.message_id)
         except Exception:
             pass
-
-        bot.send_message(
-            user_id,
-            "✅ When you have new words, just send me the Clippings.txt file again!",
-        )
 
     except Exception as e:
         logger.error(
             f"Error processing user {message.from_user.id}: {e}", exc_info=True
         )
-        bot.reply_to(message, "❌ An internal error occurred. Please try again later.")
+        await message.reply("❌ An internal error occurred. Please try again later.")
+
+
+async def main():
+    # Remove webhook if it exists (useful for local dev)
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
-    logger.info("Bot started...")
-    bot.infinity_polling()
+    logger.info("Bot started via Aiogram...")
+    asyncio.run(main())
