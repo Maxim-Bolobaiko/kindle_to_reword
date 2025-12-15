@@ -1,14 +1,29 @@
+# virtual environment
 venv/
+
+# Python 
 __pycache__/
 *.pyc
+
+# files with sensitive information
 .env
+
+# database files
 *.db
+
+# Временные файлы и папки
 temp/
+temp_files/
 data/
 history/
 output/
+
+# local files
 processed_words.txt
 My Clippings.txt
+
+# system files
 .DS_Store
 Thumbs.db
 .vscode/
+.idea/
