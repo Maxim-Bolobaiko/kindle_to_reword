@@ -25,6 +25,8 @@ except ValueError:
     print("Error: ADMIN_ID must be an integer")
     sys.exit(1)
 
+YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
+
 # 3. Logic Settings
 AUTO_CONFIRM = os.getenv("AUTO_CONFIRM", "False").lower() == "true"
 
