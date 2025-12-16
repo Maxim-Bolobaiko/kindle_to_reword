@@ -2,6 +2,7 @@ import asyncio
 import html
 import logging
 import os
+from datetime import datetime
 
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command, CommandStart
@@ -209,8 +210,11 @@ async def handle_docs(message: types.Message):
 
             if book_results:
                 safe_name = core.sanitize_filename(book_title)
+                timestamp = datetime.now().strftime("%d-%m-%y__%H-%M")
+                csv_filename = f"{safe_name}_{timestamp}.csv"
+
                 os.makedirs(TEMP_DIR, exist_ok=True)
-                csv_path = os.path.join(TEMP_DIR, f"{safe_name}.csv")
+                csv_path = os.path.join(TEMP_DIR, f"{csv_filename}.csv")
 
                 if core.create_csv(book_results, csv_path):
                     doc_file = FSInputFile(csv_path)
@@ -224,7 +228,8 @@ async def handle_docs(message: types.Message):
                     except Exception as e:
                         logger.error(f"Failed to send document: {e}")
                     finally:
-                        os.remove(csv_path)
+                        if os.path.exists(csv_path):
+                            os.remove(csv_path)
 
             try:
                 await bot.delete_message(user_id, prog_msg.message_id)
