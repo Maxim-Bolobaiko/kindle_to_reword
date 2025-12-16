@@ -2,7 +2,7 @@ import asyncio
 import html
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command, CommandStart
@@ -210,7 +210,18 @@ async def handle_docs(message: types.Message):
 
             if book_results:
                 safe_name = core.sanitize_filename(book_title)
-                timestamp = datetime.now().strftime("%d-%m-%y__%H-%M")
+
+                local_now = datetime.now()
+                utc_now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+
+                diff_seconds = abs((local_now - utc_now_naive).total_seconds())
+                if diff_seconds < 300:
+                    final_time = local_now + timedelta(hours=3)
+                else:
+                    final_time = local_now
+
+                timestamp = final_time.strftime("%d-%m-%y__%H-%M")
+
                 csv_filename = f"{safe_name}_{timestamp}.csv"
 
                 os.makedirs(TEMP_DIR, exist_ok=True)
