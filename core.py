@@ -109,10 +109,9 @@ class SmartTranslator:
                 top_tr = translations[0]
                 collected_words.append(top_tr["text"])
 
-                # Add synonyms ONLY from the first definition (most frequent)
-                if i == 0:
-                    syns = [s["text"] for s in top_tr.get("syn", [])][:3]
-                    collected_words.extend(syns)
+                # Add synonyms from all definitions
+                syns = [s["text"] for s in top_tr.get("syn", [])][:3]
+                collected_words.extend(syns)
 
             # Remove duplicates while preserving order
             unique_words = list(dict.fromkeys(collected_words))
