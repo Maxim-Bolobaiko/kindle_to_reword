@@ -100,18 +100,15 @@ class SmartTranslator:
 
             # 2. Extract Translations (Aggregate from all parts of speech)
             collected_words = []
-            for i, definition in enumerate(definitions):
+
+            for definition in definitions:
                 translations = definition.get("tr", [])
-                if not translations:
-                    continue
 
-                # Main translation
-                top_tr = translations[0]
-                collected_words.append(top_tr["text"])
-
-                # Add synonyms from all definitions
-                syns = [s["text"] for s in top_tr.get("syn", [])][:3]
-                collected_words.extend(syns)
+                for tr_entry in translations:
+                    collected_words.append(tr_entry["text"])
+                    # Add synonyms from all definitions
+                    syns = [s["text"] for s in tr_entry.get("syn", [])][:3]
+                    collected_words.extend(syns)
 
             # Remove duplicates while preserving order
             unique_words = list(dict.fromkeys(collected_words))
