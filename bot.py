@@ -222,7 +222,7 @@ async def handle_docs(message: types.Message):
 
                 timestamp = final_time.strftime("%d-%m-%y__%H-%M")
 
-                csv_filename = f"{safe_name}_{timestamp}.csv"
+                csv_filename = f"{safe_name}_{timestamp}"
 
                 os.makedirs(TEMP_DIR, exist_ok=True)
                 csv_path = os.path.join(TEMP_DIR, f"{csv_filename}.csv")
