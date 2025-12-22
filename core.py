@@ -187,7 +187,7 @@ def parse_clippings_content(content, history_set):
             continue
 
         book_title = lines[0]
-        clean_word = lines[-1].strip(' .,?!:;"“”‘’«»()')
+        clean_word = lines[-1].strip(' .,?!:;"“”‘’«»()-—')
 
         # Limit: Max 6 words (to filter out long sentences)
         if clean_word and len(clean_word.split()) <= 6:
